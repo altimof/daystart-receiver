@@ -42,6 +42,29 @@
     #lines li { font-size: 3.6vh; padding: 1.4vh 0; border-top: 1px solid #2a2e37; }
     #lines li:first-child { border-top: 0; }
     .empty { color: var(--muted); }
+
+    /* Morning routine: full-screen prompt over the dashboard */
+    #routine {
+      position: fixed; inset: 0;
+      background: var(--bg);
+      display: none;
+      flex-direction: column; align-items: center; justify-content: center;
+      gap: 5vh; padding: 6vh 6vw; text-align: center;
+    }
+    #routine.show { display: flex; }
+    #routine-clock { color: var(--muted); font-size: 5vh; font-variant-numeric: tabular-nums; }
+    #routine-text { font-size: 11vh; font-weight: 500; line-height: 1.15; }
+    #routine-sub { color: var(--muted); font-size: 5vh; }
+    #routine.alarm #routine-text { color: var(--accent); animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: 0.45; } }
+    #done-btn {
+      font: inherit; font-size: 6vh; font-weight: 500;
+      color: #10131a; background: var(--accent);
+      border: 0; border-radius: 6vh; padding: 3vh 8vw;
+      cursor: pointer;
+    }
+    #done-btn:active { transform: scale(0.97); }
+    #done-btn[hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -55,18 +78,163 @@
     <ul id="lines"><li class="empty">Waiting for your phone…</li></ul>
   </section>
 
+  <section id="routine">
+    <div id="routine-clock"></div>
+    <div id="routine-text"></div>
+    <div id="routine-sub"></div>
+    <button id="done-btn" type="button">Completed</button>
+  </section>
+
   <script>
     // Messages from the Android app arrive on this namespace as JSON:
     // { "title": "Today", "lines": ["…", "…"] }
     const NAMESPACE = 'urn:x-cast:com.example.daystart';
 
+    // Weekday morning routine. Each prompt appears at its time; "Completed" moves on,
+    // but the next prompt still waits for its own time.
+    const ROUTINE = [
+      { at: '07:05', text: 'Good morning! Time to wake up', alarm: true },
+      { at: '07:07', text: '07:07 — I love you!' },
+      { at: '07:08', text: 'Time to brush your teeth' },
+      { at: '07:10', text: 'Time to have breakfast' },
+      { at: '07:15', text: 'Time to finish breakfast' },
+      { at: '07:20', text: 'Time to start combing your hair' },
+    ];
+    const ROUTINE_END = '10:00';      // unfinished prompts are dropped after this
+    const ALARM_MAX_MS = 10 * 60e3;   // alarm gives up after 10 minutes
+    const DONE_SHOW_MS = 2 * 60e3;    // "All done" screen stays this long
+
+    // Testing in a desktop browser: ?at=07:04 starts the clock at 07:04 on a weekday.
+    const params = new URLSearchParams(location.search);
+    let clockOffset = 0;
+    if (params.has('at')) {
+      const fake = new Date();
+      const [h, m] = params.get('at').split(':').map(Number);
+      fake.setHours(h, m, 0, 0);
+      while (fake.getDay() === 0 || fake.getDay() === 6) fake.setDate(fake.getDate() + 1);
+      clockOffset = fake - Date.now();
+    }
+    const currentTime = () => new Date(Date.now() + clockOffset);
+
+    const toSecs = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 3600 + m * 60; };
+    const secsOf = (d) => d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+    const isWeekday = (d) => d.getDay() >= 1 && d.getDay() <= 5;
+
+    // phase: 'off' (not today) | 'waiting' (for ROUTINE[step].at) | 'prompt' | 'done' | 'finished'
+    const routine = { day: null, step: 0, phase: 'off', doneAt: 0 };
+
+    function updateRoutine(now) {
+      const secs = secsOf(now);
+      if (routine.day !== now.toDateString()) {
+        routine.day = now.toDateString();
+        routine.step = 0;
+        routine.phase = isWeekday(now) && secs < toSecs(ROUTINE_END) ? 'waiting' : 'off';
+        stopAlarm();
+        // Cast after the routine started: pick up at the latest prompt that is due,
+        // but don't ring the alarm if it is already more than 5 minutes late.
+        if (routine.phase === 'waiting' && secs > toSecs(ROUTINE[0].at) + 5 * 60) {
+          let due = 0;
+          ROUTINE.forEach((s, i) => { if (toSecs(s.at) <= secs) due = i; });
+          routine.step = Math.max(1, due);
+        }
+      }
+      if (routine.phase === 'waiting' || routine.phase === 'prompt') {
+        if (secs >= toSecs(ROUTINE_END)) {
+          routine.phase = 'finished';
+          stopAlarm();
+        } else if (routine.phase === 'waiting' && secs >= toSecs(ROUTINE[routine.step].at)) {
+          routine.phase = 'prompt';
+          if (ROUTINE[routine.step].alarm) startAlarm();
+        }
+      }
+      if (routine.phase === 'done' && now - routine.doneAt > DONE_SHOW_MS) routine.phase = 'finished';
+      renderRoutine(now);
+    }
+
+    function completeStep() {
+      if (routine.phase !== 'prompt') return;
+      stopAlarm();
+      routine.step++;
+      if (routine.step >= ROUTINE.length) {
+        routine.phase = 'done';
+        routine.doneAt = currentTime();
+      } else {
+        routine.phase = 'waiting';
+      }
+      updateRoutine(currentTime());
+    }
+
+    function renderRoutine(now) {
+      const box = document.getElementById('routine');
+      const text = document.getElementById('routine-text');
+      const sub = document.getElementById('routine-sub');
+      const btn = document.getElementById('done-btn');
+      const step = ROUTINE[routine.step];
+      let show = true;
+      if (routine.phase === 'prompt') {
+        text.textContent = step.text;
+        sub.textContent = '';
+        btn.hidden = false;
+      } else if (routine.phase === 'waiting' && routine.step > 0) {
+        text.textContent = 'Done!';
+        sub.textContent = 'Next at ' + step.at;
+        btn.hidden = true;
+      } else if (routine.phase === 'done') {
+        text.textContent = 'All done! Have a great day';
+        sub.textContent = '';
+        btn.hidden = true;
+      } else {
+        show = false;
+      }
+      box.classList.toggle('show', show);
+      box.classList.toggle('alarm', routine.phase === 'prompt' && !!step?.alarm);
+      document.getElementById('routine-clock').textContent =
+        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
+    document.getElementById('done-btn').addEventListener('click', completeStep);
+
+    // Alarm: repeating double beep made with Web Audio, so no sound file is needed.
+    let audio = null, alarmTimer = null, alarmStarted = 0;
+    function beep(at, freq) {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.6, at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.25);
+      osc.connect(gain).connect(audio.destination);
+      osc.start(at);
+      osc.stop(at + 0.3);
+    }
+    function startAlarm() {
+      if (alarmTimer) return;
+      audio = audio || new AudioContext();
+      audio.resume();
+      alarmStarted = Date.now();
+      const ring = () => {
+        if (Date.now() - alarmStarted > ALARM_MAX_MS) return stopAlarm();
+        const t = audio.currentTime + 0.05;
+        beep(t, 880);
+        beep(t + 0.35, 880);
+      };
+      ring();
+      alarmTimer = setInterval(ring, 1500);
+    }
+    function stopAlarm() {
+      clearInterval(alarmTimer);
+      alarmTimer = null;
+    }
+
     function tick() {
-      const now = new Date();
+      const now = currentTime();
+      updateRoutine(now);
       const h = now.getHours();
       document.getElementById('greeting').textContent =
         h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
       document.getElementById('clock').textContent =
-        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       document.getElementById('date').textContent =
         now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
     }
@@ -101,6 +269,7 @@
       });
       const options = new cast.framework.CastReceiverOptions();
       options.disableIdleTimeout = true; // no media plays, so keep the dashboard up
+      options.touchScreenOptimizedApp = true; // let taps on the Hub reach the Completed button
       context.start(options);
     } else {
       render({ title: 'Today (preview)', lines: ['Stand-up at 9:30', 'Gym at 18:00', 'Buy coffee beans'] });
