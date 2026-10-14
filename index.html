@@ -114,7 +114,26 @@
       while (fake.getDay() === 0 || fake.getDay() === 6) fake.setDate(fake.getDate() + 1);
       clockOffset = fake - Date.now();
     }
-    const currentTime = () => new Date(Date.now() + clockOffset);
+    // "Test routine" from the phone: replay the routine from 07:04:50 at 10x speed.
+    const TEST_SPEED = 10;
+    let test = null; // { fakeStart, realStart } while a test runs
+    const currentTime = () => test
+      ? new Date(test.fakeStart + (Date.now() - test.realStart) * TEST_SPEED)
+      : new Date(Date.now() + clockOffset);
+
+    function startTest() {
+      const fake = new Date();
+      fake.setHours(7, 4, 50, 0);
+      while (fake.getDay() === 0 || fake.getDay() === 6) fake.setDate(fake.getDate() + 1);
+      test = { fakeStart: fake.getTime(), realStart: Date.now() };
+      routine.day = null; // restart the routine on the fake clock
+      tick();
+    }
+
+    function endTest() {
+      test = null;
+      routine.day = null; // back to the real clock and today's real state
+    }
 
     const toSecs = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 3600 + m * 60; };
     const secsOf = (d) => d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
@@ -148,6 +167,7 @@
         }
       }
       if (routine.phase === 'done' && now - routine.doneAt > DONE_SHOW_MS) routine.phase = 'finished';
+      if (test && routine.phase === 'finished') return endTest();
       renderRoutine(now);
     }
 
@@ -265,13 +285,15 @@
       const context = cast.framework.CastReceiverContext.getInstance();
       context.addCustomMessageListener(NAMESPACE, (event) => {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        render(data);
+        if (data.type === 'testRoutine') startTest();
+        else render(data);
       });
       const options = new cast.framework.CastReceiverOptions();
       options.disableIdleTimeout = true; // no media plays, so keep the dashboard up
       options.touchScreenOptimizedApp = true; // let taps on the Hub reach the Completed button
       context.start(options);
     } else {
+      if (params.has('test')) startTest();
       render({ title: 'Today (preview)', lines: ['Stand-up at 9:30', 'Gym at 18:00', 'Buy coffee beans'] });
     }
   </script>
