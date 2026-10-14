@@ -212,7 +212,11 @@
         now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     }
 
-    document.getElementById('done-btn').addEventListener('click', completeStep);
+    // Touch on the Hub may not produce "click", so react to the first pointer/touch event.
+    // completeStep() ignores repeats because the phase is no longer 'prompt'.
+    for (const type of ['pointerup', 'touchend', 'click']) {
+      document.getElementById('done-btn').addEventListener(type, (e) => { e.preventDefault(); completeStep(); });
+    }
 
     // Alarm: repeating double beep made with Web Audio, so no sound file is needed.
     let audio = null, alarmTimer = null, alarmStarted = 0;
@@ -281,7 +285,7 @@
 
     // On a Cast device (user agent contains "CrKey") start the receiver;
     // in a desktop browser just show sample data so the layout can be checked.
-    const VERSION = 3;
+    const VERSION = 4;
     if (navigator.userAgent.includes('CrKey')) {
       const context = cast.framework.CastReceiverContext.getInstance();
       // Diagnostics: tell senders what the page is doing (there is no debugger on the Hub).
@@ -289,11 +293,16 @@
         try {
           context.sendCustomMessage(NAMESPACE, undefined, {
             type, version: VERSION, visibility: document.visibilityState,
-            standby: context.getStandbyState?.(), phase: routine.phase, ...extra,
+            standby: context.getStandbyState?.(), phase: routine.phase, step: routine.step,
+            audio: audio?.state, ...extra,
           });
         } catch (e) { /* no senders yet */ }
       };
       context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => report('hello'));
+      for (const type of ['pointerdown', 'touchstart', 'mousedown', 'click', 'keydown']) {
+        window.addEventListener(type, (e) => report('input', { kind: type, key: e.key, target: e.target?.id || e.target?.tagName }), true);
+      }
+      window.addEventListener('error', (e) => report('error', { message: e.message }));
       context.addEventListener(cast.framework.system.EventType.VISIBILITY_CHANGED, (e) => report('visibility', { isVisible: e.isVisible }));
       context.addCustomMessageListener(NAMESPACE, (event) => {
         try {
