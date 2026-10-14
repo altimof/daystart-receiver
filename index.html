@@ -281,12 +281,29 @@
 
     // On a Cast device (user agent contains "CrKey") start the receiver;
     // in a desktop browser just show sample data so the layout can be checked.
+    const VERSION = 3;
     if (navigator.userAgent.includes('CrKey')) {
       const context = cast.framework.CastReceiverContext.getInstance();
+      // Diagnostics: tell senders what the page is doing (there is no debugger on the Hub).
+      const report = (type, extra = {}) => {
+        try {
+          context.sendCustomMessage(NAMESPACE, undefined, {
+            type, version: VERSION, visibility: document.visibilityState,
+            standby: context.getStandbyState?.(), phase: routine.phase, ...extra,
+          });
+        } catch (e) { /* no senders yet */ }
+      };
+      context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => report('hello'));
+      context.addEventListener(cast.framework.system.EventType.VISIBILITY_CHANGED, (e) => report('visibility', { isVisible: e.isVisible }));
       context.addCustomMessageListener(NAMESPACE, (event) => {
-        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        if (data.type === 'testRoutine') startTest();
-        else render(data);
+        try {
+          const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+          if (data.type === 'ping') report('pong');
+          else if (data.type === 'testRoutine') { startTest(); report('ack', { got: 'testRoutine' }); }
+          else { render(data); report('ack', { got: 'lines' }); }
+        } catch (e) {
+          report('error', { message: String(e) });
+        }
       });
       const options = new cast.framework.CastReceiverOptions();
       options.disableIdleTimeout = true; // no media plays, so keep the dashboard up
