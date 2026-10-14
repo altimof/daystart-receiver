@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DayStart</title>
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --fg: #f2f3f5;
+      --muted: #8b919c;
+      --card: #1a1d24;
+      --accent: #f5b14c;
+    }
+    * { box-sizing: border-box; margin: 0; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: "Google Sans", Roboto, system-ui, sans-serif;
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      gap: 4vw;
+      padding: 6vh 5vw;
+      overflow: hidden;
+    }
+    .left { display: flex; flex-direction: column; justify-content: center; }
+    #greeting { color: var(--accent); font-size: 4.5vh; font-weight: 500; }
+    #clock { font-size: 22vh; font-weight: 300; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+    #date { color: var(--muted); font-size: 4.5vh; margin-top: 1vh; }
+    .card {
+      background: var(--card);
+      border-radius: 3vh;
+      padding: 4vh 3.5vw;
+      align-self: center;
+      max-height: 100%;
+      overflow: hidden;
+    }
+    #title { font-size: 4vh; font-weight: 500; margin-bottom: 2.5vh; }
+    #lines { list-style: none; padding: 0; }
+    #lines li { font-size: 3.6vh; padding: 1.4vh 0; border-top: 1px solid #2a2e37; }
+    #lines li:first-child { border-top: 0; }
+    .empty { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <section class="left">
+    <div id="greeting"></div>
+    <div id="clock"></div>
+    <div id="date"></div>
+  </section>
+  <section class="card">
+    <div id="title">Today</div>
+    <ul id="lines"><li class="empty">Waiting for your phone…</li></ul>
+  </section>
+
+  <script>
+    // Messages from the Android app arrive on this namespace as JSON:
+    // { "title": "Today", "lines": ["…", "…"] }
+    const NAMESPACE = 'urn:x-cast:com.example.daystart';
+
+    function tick() {
+      const now = new Date();
+      const h = now.getHours();
+      document.getElementById('greeting').textContent =
+        h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+      document.getElementById('clock').textContent =
+        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('date').textContent =
+        now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+    }
+    tick();
+    setInterval(tick, 1000);
+
+    function render(data) {
+      if (data.title) document.getElementById('title').textContent = data.title;
+      const list = document.getElementById('lines');
+      list.replaceChildren();
+      const lines = Array.isArray(data.lines) ? data.lines : [];
+      if (lines.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'Nothing for today';
+        list.append(li);
+      }
+      for (const line of lines) {
+        const li = document.createElement('li');
+        li.textContent = String(line);
+        list.append(li);
+      }
+    }
+
+    // On a Cast device (user agent contains "CrKey") start the receiver;
+    // in a desktop browser just show sample data so the layout can be checked.
+    if (navigator.userAgent.includes('CrKey')) {
+      const context = cast.framework.CastReceiverContext.getInstance();
+      context.addCustomMessageListener(NAMESPACE, (event) => {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        render(data);
+      });
+      const options = new cast.framework.CastReceiverOptions();
+      options.disableIdleTimeout = true; // no media plays, so keep the dashboard up
+      context.start(options);
+    } else {
+      render({ title: 'Today (preview)', lines: ['Stand-up at 9:30', 'Gym at 18:00', 'Buy coffee beans'] });
+    }
+  </script>
+</body>
+</html>
